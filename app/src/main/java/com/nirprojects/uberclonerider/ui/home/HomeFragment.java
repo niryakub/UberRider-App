@@ -2,9 +2,12 @@ package com.nirprojects.uberclonerider.ui.home;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.location.Address;
+import android.location.Geocoder;
 import android.location.Location;
 import android.os.Bundle;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,6 +22,10 @@ import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.lifecycle.ViewModelProviders;
 
+import com.firebase.geofire.GeoFire;
+import com.firebase.geofire.GeoLocation;
+import com.firebase.geofire.GeoQuery;
+import com.firebase.geofire.GeoQueryEventListener;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
@@ -28,20 +35,42 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MapStyleOptions;
+import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.material.snackbar.Snackbar;
+import com.google.firebase.database.ChildEventListener;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
 import com.karumi.dexter.Dexter;
 import com.karumi.dexter.PermissionToken;
 import com.karumi.dexter.listener.PermissionDeniedResponse;
 import com.karumi.dexter.listener.PermissionGrantedResponse;
 import com.karumi.dexter.listener.PermissionRequest;
 import com.karumi.dexter.listener.single.PermissionListener;
+import com.nirprojects.uberclonerider.Callback.IFirebaseDriverInfoListener;
+import com.nirprojects.uberclonerider.Callback.IFirebaseFailedListener;
+import com.nirprojects.uberclonerider.Common.Common;
+import com.nirprojects.uberclonerider.Model.DriverGeoModel;
+import com.nirprojects.uberclonerider.Model.DriverInfoModel;
+import com.nirprojects.uberclonerider.Model.GeoQueryModel;
 import com.nirprojects.uberclonerider.R;
 
-public class HomeFragment extends Fragment implements OnMapReadyCallback {
+import java.io.IOException;
+import java.util.List;
+import java.util.Locale;
+
+import io.reactivex.Observable;
+import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.schedulers.Schedulers;
+
+public class HomeFragment extends Fragment implements OnMapReadyCallback, IFirebaseFailedListener, IFirebaseDriverInfoListener{
 
     private HomeViewModel homeViewModel;
 
@@ -52,6 +81,18 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback {
     private FusedLocationProviderClient fusedLocationProviderClient;
     private LocationRequest locationRequest;
     private LocationCallback locationCallback;
+
+    //Load Driver
+    private double distance = 1.0; //default radius in km
+    private static final double LIMIT_RANGE = 10.0; // in km..
+    private Location previousLocation, currentLocation; //will be used to calculate distance..
+
+    private boolean firstTime = true;
+
+    //Listeners
+    IFirebaseDriverInfoListener iFirebaseDriverInfoListener;
+    IFirebaseFailedListener ifirebaseFailedListener;
+    private String cityName;
 
     @Override
     public void onDestroy() {
@@ -78,21 +119,42 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback {
     }
 
     private void init() {
-        //zoom onto device's gps-location here...
+
+        ifirebaseFailedListener = this;
+        iFirebaseDriverInfoListener = this;
+
+        //apply the locationRequest attributes for:fusedLocationProviderClient.requestLocationUpdates(locationRequest, locationCallback, Looper.myLooper());
+        //this will determine the way we periodicly request Location from device.
         locationRequest = new LocationRequest();
-        locationRequest.setSmallestDisplacement(10f);
-        locationRequest.setInterval(5000);
-        locationRequest.setFastestInterval(3000);
+        locationRequest.setSmallestDisplacement(10f); //Set the minimum displacement between location updates in METERS
+        locationRequest.setInterval(5000); //meaning, every 5 seconds, we grab device's location...
+        locationRequest.setFastestInterval(3000); // Explicitly set the fastest interval for location updates, in milliseconds.
         locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
 
         locationCallback = new LocationCallback() {
-
+            //TODO: This LocationCallback is invoked by  fusedLocationProviderClient.requestLocationUpdates(locationRequest, locationCallback, Looper.myLooper());
+            // according to locationReuqest attributes, thus in our case, it's invoked approximately every 5  seconds...
             @Override
             public void onLocationResult(LocationResult locationResult) {
                 super.onLocationResult(locationResult);
                 LatLng newPosition = new LatLng(locationResult.getLastLocation().getLatitude(),
                         locationResult.getLastLocation().getLongitude());
                 mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(newPosition, 18f));
+
+                //if user has changed location, calculate and load driver again..
+                if (firstTime) {
+                    previousLocation = currentLocation = locationResult.getLastLocation();
+                    firstTime = false;
+                } else { //save last location, adjust current one..
+                    previousLocation = currentLocation;
+                    currentLocation = locationResult.getLastLocation();
+                }
+
+                if (previousLocation.distanceTo(currentLocation) / 1000 <= LIMIT_RANGE) //if not Over-ranged (.distanceTo() = Returns the approximate distance in meters between this location and the given location.)
+                    loadAvailableDrivers();
+                else {
+                    //Do nothing..
+                }
             }
         };
 
@@ -103,9 +165,191 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback {
                         PackageManager.PERMISSION_GRANTED) {
             return;
         }
-
+        //Requests location updates with a callback on the specified Looper thread.
+        //note: This call will keep the Google Play services connection active,
+        // so need to make sure to call removeLocationUpdates(LocationCallback) when you no longer need it,
+        //Callbacks for LocationCallback will be made on the specified thread,
+        // which must already be a prepared looper thread.
         fusedLocationProviderClient.requestLocationUpdates(locationRequest, locationCallback, Looper.myLooper());
+
+        loadAvailableDrivers();
     }
+
+    private void loadAvailableDrivers() {
+
+        if (ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Snackbar.make(getView(), getString(R.string.permission_require), Snackbar.LENGTH_SHORT).show();
+            return;
+        }
+        fusedLocationProviderClient.getLastLocation()
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        Snackbar.make(getView(), e.getMessage(), Snackbar.LENGTH_SHORT).show();
+                    }
+                })
+                .addOnSuccessListener(new OnSuccessListener<Location>() {
+                    @Override
+                    public void onSuccess(Location location) {
+                        //At the moment, loads all the drivers within the same city as Rider.
+                        Geocoder geocoder = new Geocoder(getContext(), Locale.getDefault());
+                        List<Address> addressList;
+                        try{
+                            addressList = geocoder.getFromLocation(location.getLatitude(),location.getLongitude(),1);
+                            cityName = addressList.get(0).getLocality(); // grab city name according to physical location..
+
+                            //query+obtain ref..
+                            DatabaseReference driver_location_ref = FirebaseDatabase.getInstance()
+                                    .getReference(Common.DRIVERS_LOCATION_REFERENCES)
+                                    .child(cityName); // Holds reference to the city the Rider is currently located within!
+
+
+                            //A GeoFire object is used to read and write geo location data to your Firebase database and to create queries. To create a new GeoFire instance you need to attach it to a Firebase database reference.
+                            GeoFire gf = new GeoFire(driver_location_ref);
+                            //GeoFire allows you to query all keys within a geographic area using GeoQuery objects.
+                            // As the locations for keys change, the query is updated in realtime and fires events letting you know if any relevant keys have moved.
+                            // GeoQuery parameters can be updated later to change the size and center of the queried area.
+                            GeoQuery geoQuery = gf.queryAtLocation(new GeoLocation(location.getLatitude(),
+                                    location.getLongitude()),distance); //intialized to device's last location, and radius=distance..
+                            geoQuery.removeAllListeners(); //we'll add customized..
+
+                            geoQuery.addGeoQueryEventListener(new GeoQueryEventListener() {
+                                @Override
+                                //onKeyEntered() : Called if a key entered the search area of the GeoQuery.
+                                //This method is called for every key currently in the search area at the time of adding the listener.
+                                //This method is once per key, and is only called again if onKeyExited was called in the meantime.
+                                public void onKeyEntered(String key, GeoLocation location) {
+                                    Common.driversFound.add(new DriverGeoModel(key,location)); // add it to the list of already found drivers within radius..
+                                }
+
+                                @Override
+                                public void onKeyExited(String key) {
+
+                                }
+
+                                @Override
+                                public void onKeyMoved(String key, GeoLocation location) {
+
+                                }
+
+                                @Override
+                                //Called once all initial GeoFire data has been loaded and the relevant events have been fired for this query.
+                                //Every time the query criteria is updated,
+                                //this observer will be called after the updated query has fired the appropriate key entered or key exited events.
+                                public void onGeoQueryReady() {
+                                    if(distance <= LIMIT_RANGE)
+                                    {
+                                        distance++;
+                                        loadAvailableDrivers(); //continue search within new adjusted distance..
+                                    }
+                                    else
+                                    {
+                                        distance = 1.0; //reset distance..
+                                        addDriverMarker(); //apply all found drivers onto the Rider's ma
+                                    }
+                                }
+
+                                @Override
+                                public void onGeoQueryError(DatabaseError error) {
+                                    Snackbar.make(getView(),error.getMessage(),Snackbar.LENGTH_SHORT).show();
+                                }
+                            });
+
+                            //listen to new driver within city and range
+                            driver_location_ref.addChildEventListener(new ChildEventListener() {
+                                @Override
+                                public void onChildAdded(@NonNull DataSnapshot snapshot, @Nullable String previousChildName) {
+                                    //incase of new driver within range, this method is invoked!
+                                    GeoQueryModel geoQueryModel = snapshot.getValue(GeoQueryModel.class);
+                                    GeoLocation geoLocation = new GeoLocation(geoQueryModel.getL().get(0),
+                                            geoQueryModel.getL().get(1)); //grab lang' and long' from db..
+                                    DriverGeoModel driverGeoModel = new DriverGeoModel(snapshot.getKey(),geoLocation);
+                                    Location newDriverLocation = new Location("");
+                                    newDriverLocation.setLatitude(geoLocation.latitude);
+                                    newDriverLocation.setLongitude(geoLocation.longitude);
+                                    float newDistance = location.distanceTo(newDriverLocation)/1000; //holds distance in km between rider and new driver
+                                    if(newDistance <= LIMIT_RANGE) //incase driver is really within radius..
+                                        findDriverByKey(driverGeoModel); //add driver to map..
+                                }
+
+                                @Override
+                                public void onChildChanged(@NonNull DataSnapshot snapshot, @Nullable String previousChildName) {
+
+                                }
+
+                                @Override
+                                public void onChildRemoved(@NonNull DataSnapshot snapshot) {
+
+                                }
+
+                                @Override
+                                public void onChildMoved(@NonNull DataSnapshot snapshot, @Nullable String previousChildName) {
+
+                                }
+
+                                @Override
+                                public void onCancelled(@NonNull DatabaseError error) {
+
+                                }
+                            });
+
+
+
+
+                        } catch (IOException e) {
+                            e.printStackTrace();
+                            Snackbar.make(getView(),e.getMessage(),Snackbar.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+
+    }
+
+    private void addDriverMarker() { //applies all Drivers-in-rider's-range markers within the rider's map
+        if(Common.driversFound.size()>0)//if found any drivers..
+        {
+            Observable.fromIterable(Common.driversFound)
+                    .subscribeOn(Schedulers.newThread()) //Asynchronously subscribes Observers to this ObservableSource on the specified Scheduler.
+                    .observeOn(AndroidSchedulers.mainThread())
+                    .subscribe(driverGeoModel -> {
+                        //On next
+                        findDriverByKey(driverGeoModel);
+                    },throwable -> {
+                        Snackbar.make(getView(),throwable.getMessage(),Snackbar.LENGTH_SHORT).show();
+                    },()->{
+
+                    });
+
+        }
+        else
+        {
+            Snackbar.make(getView(),getString(R.string.drivers_not_found),Snackbar.LENGTH_SHORT).show();
+        }
+    }
+
+    private void findDriverByKey(DriverGeoModel driverGeoModel) {
+        FirebaseDatabase.getInstance()
+                .getReference(Common.DRIVERS_INFO_REFERENCE)
+                .child(driverGeoModel.getKey()) //grab a reference to DriverInfo according to it's userId..
+                .addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                        if(dataSnapshot.hasChildren()) //meaning, if exists...
+                        {
+                            driverGeoModel.setDriverInfoModel(dataSnapshot.getValue(DriverInfoModel.class));
+                            iFirebaseDriverInfoListener.onDriverInfoLoadSuccess(driverGeoModel);
+                        }
+                        else
+                            ifirebaseFailedListener.onFirebaseLoadFailed(getString(R.string.not_found_key)+driverGeoModel.getKey());
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError databaseError) {
+                        ifirebaseFailedListener.onFirebaseLoadFailed(databaseError.getMessage());
+                    }
+                });
+    }
+
 
     @Override
     public void onMapReady(GoogleMap googleMap) {
@@ -157,7 +401,7 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback {
                         //Right buttom
                         params.addRule(RelativeLayout.ALIGN_PARENT_TOP,0);
                         params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM,RelativeLayout.TRUE);
-                        params.setMargins(0,0,0,50);
+                        params.setMargins(0,0,0,250); // move view so it won't clash ui-ly with zoom-controls..
                     }
 
                     @Override
@@ -172,6 +416,7 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback {
                 })
                 .check();
 
+        mMap.getUiSettings().setZoomControlsEnabled(true);
         //Apply customized-GoogleMap-Style
         try {
             boolean success = googleMap.setMapStyle((MapStyleOptions.loadRawResourceStyle(getContext(), R.raw.uber_maps_style)));
@@ -182,5 +427,52 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback {
         }
 
 
+    }
+
+    @Override
+    public void onFirebaseLoadFailed(String message) {
+        Snackbar.make(getView(),message,Snackbar.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onDriverInfoLoadSuccess(DriverGeoModel driverGeoModel) {
+        //if we already have a marker associated with this key, we dont set again..
+        if(!Common.markerList.containsKey(driverGeoModel.getKey())){//if not..
+            //add marker to markerList & apply that marker within our Map.
+            Common.markerList.put(driverGeoModel.getKey(),
+                    mMap.addMarker(new MarkerOptions()
+                    .position(new LatLng(driverGeoModel.getGeoLocation().latitude,
+                            driverGeoModel.getGeoLocation().longitude))
+                    .flat(true)
+                    .title(Common.buildName(driverGeoModel.getDriverInfoModel().getFirstName(),
+                            driverGeoModel.getDriverInfoModel().getLastName()))
+                    .snippet(driverGeoModel.getDriverInfoModel().getPhoneNumber())//sets marker body..
+                    .icon(BitmapDescriptorFactory.fromResource(R.drawable.car))));
+        }
+
+        if(!TextUtils.isEmpty(cityName)) //i
+        {
+            DatabaseReference driverLocation = FirebaseDatabase.getInstance()
+                    .getReference(Common.DRIVERS_LOCATION_REFERENCES)
+                    .child(cityName)
+                    .child(driverGeoModel.getKey());
+
+            driverLocation.addValueEventListener(new ValueEventListener() {
+                @Override
+                public void onDataChange(@NonNull DataSnapshot snapshot) {
+                    if(!snapshot.hasChildren())
+                    {
+                        if(Common.markerList.get(driverGeoModel.getKey()) != null)
+                            Common.markerList.get(driverGeoModel.getKey()).remove(); //remove marker...
+                        Common.markerList.remove(driverGeoModel.getKey());//remove marker info from hash-map.
+                        driverLocation.removeEventListener(this);
+                    }
+                }
+                @Override
+                public void onCancelled(@NonNull DatabaseError error) {
+                    Snackbar.make(getView(),error.getMessage(),Snackbar.LENGTH_SHORT).show();
+                }
+            });
+        }
     }
 }

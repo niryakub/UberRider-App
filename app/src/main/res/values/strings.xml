@@ -18,4 +18,7 @@
     <string name="menu_gallery">Gallery</string>
     <string name="menu_slideshow">Slideshow</string>
     <string name="title_activity_maps">Map</string>
+    <string name="permission_require">Location Permission Required</string>
+    <string name="drivers_not_found">Drivers Not Found!</string>
+    <string name="not_found_key">Not found driver with key</string>
 </resources>

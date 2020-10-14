@@ -75,5 +75,8 @@ dependencies {
     //Firebase FCM
     implementation 'com.google.firebase:firebase-messaging:20.2.0'
 
+    //GeoFire
+    implementation 'com.firebase:geofire-android:3.0.0'
+
 
 }
