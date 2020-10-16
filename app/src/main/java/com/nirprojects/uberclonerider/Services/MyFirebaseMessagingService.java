@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.os.Build;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
@@ -23,9 +24,11 @@ import java.util.Map;
 import java.util.Random;
 
 public class MyFirebaseMessagingService extends FirebaseMessagingService {
+    private static final String TAG = "FirebaseMessaging";
 
     @Override
     public void onNewToken(@NonNull String s) {
+        Log.d(TAG,"onOnNewToken()");
         super.onNewToken(s);
         if(FirebaseAuth.getInstance().getCurrentUser() != null){
             UserUtils.updateToken(this,s);
@@ -35,6 +38,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     @Override
     public void onMessageReceived(@NonNull RemoteMessage remoteMessage) {
+        Log.d(TAG,"onOnMessageReceived()");
         super.onMessageReceived(remoteMessage);
         Map<String,String> dataRecv = remoteMessage.getData();
         if(dataRecv != null)

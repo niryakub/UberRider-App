@@ -1,16 +1,20 @@
 package com.nirprojects.uberclonerider.ui.home;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.content.pm.PackageManager;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.LinearInterpolator;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
@@ -38,6 +42,7 @@ import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MapStyleOptions;
+import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
@@ -57,20 +62,29 @@ import com.karumi.dexter.listener.single.PermissionListener;
 import com.nirprojects.uberclonerider.Callback.IFirebaseDriverInfoListener;
 import com.nirprojects.uberclonerider.Callback.IFirebaseFailedListener;
 import com.nirprojects.uberclonerider.Common.Common;
+import com.nirprojects.uberclonerider.Model.AnimationModel;
 import com.nirprojects.uberclonerider.Model.DriverGeoModel;
 import com.nirprojects.uberclonerider.Model.DriverInfoModel;
 import com.nirprojects.uberclonerider.Model.GeoQueryModel;
 import com.nirprojects.uberclonerider.R;
+import com.nirprojects.uberclonerider.Remote.IGoogleAPI;
+import com.nirprojects.uberclonerider.Remote.RetrofitClient;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 import io.reactivex.Observable;
 import io.reactivex.android.schedulers.AndroidSchedulers;
+import io.reactivex.disposables.CompositeDisposable;
 import io.reactivex.schedulers.Schedulers;
 
 public class HomeFragment extends Fragment implements OnMapReadyCallback, IFirebaseFailedListener, IFirebaseDriverInfoListener{
+    private static final String TAG = "HomeFragment";
 
     private HomeViewModel homeViewModel;
 
@@ -94,19 +108,35 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
     IFirebaseFailedListener ifirebaseFailedListener;
     private String cityName;
 
+    //
+    private CompositeDisposable compositeDisposable = new CompositeDisposable();
+    private IGoogleAPI iGoogleAPI;
+
+
+
+    @Override
+    public void onStop() {
+        Log.d(TAG,"onStop()");
+        compositeDisposable.clear();
+        super.onStop();
+    }
+
     @Override
     public void onDestroy() {
+        Log.d(TAG,"onDestroy()");
         fusedLocationProviderClient.removeLocationUpdates(locationCallback);
         super.onDestroy();
     }
 
     @Override
     public void onResume() {
+        Log.d(TAG,"onResume()");
         super.onResume();
     }
 
 
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+        Log.d(TAG,"onCreateView()");
         homeViewModel = new ViewModelProvider(this).get(HomeViewModel.class);
         View root = inflater.inflate(R.layout.fragment_home, container, false);
 
@@ -119,6 +149,9 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
     }
 
     private void init() {
+        Log.d(TAG,"onInit()");
+
+        iGoogleAPI = RetrofitClient.getInstance().create(IGoogleAPI.class); //initialize Retrofit and establishes end-points..
 
         ifirebaseFailedListener = this;
         iFirebaseDriverInfoListener = this;
@@ -462,10 +495,45 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
                 public void onDataChange(@NonNull DataSnapshot snapshot) {
                     if(!snapshot.hasChildren())
                     {
+                        //This is the case where driver which is already within map, isn't within DB anymore (due to range/inactive)
+                        //thus we also need to remove marker from map wherein within-db at DriverLocations/City/... he's already removed.
                         if(Common.markerList.get(driverGeoModel.getKey()) != null)
                             Common.markerList.get(driverGeoModel.getKey()).remove(); //remove marker...
                         Common.markerList.remove(driverGeoModel.getKey());//remove marker info from hash-map.
+                        Common.driverLocationSubscribe.remove(driverGeoModel.getKey()); //remove driver information too..
                         driverLocation.removeEventListener(this);
+                    }
+                    else //incase still exists within DB.. (meaning in range & active)
+                    {
+                        if(Common.markerList.get(driverGeoModel.getKey()) != null)
+                        {
+                            GeoQueryModel geoQueryModel = snapshot.getValue(GeoQueryModel.class);//grab latest location-data.
+                            AnimationModel animationModel = new AnimationModel(false,geoQueryModel);
+                            if(Common.driverLocationSubscribe.get(driverGeoModel.getKey())!=null)
+                            {
+                                Marker currentMarker = Common.markerList.get(driverGeoModel.getKey());
+                                AnimationModel oldPosition = Common.driverLocationSubscribe.get(driverGeoModel.getKey());
+
+                                String from = new StringBuilder() //previous location
+                                        .append(oldPosition.getGeoQueryModel().getL().get(0))
+                                        .append(",")
+                                        .append(oldPosition.getGeoQueryModel().getL().get(1))
+                                        .toString();
+
+                                String to = new StringBuilder() //current-latest location
+                                        .append(animationModel.getGeoQueryModel().getL().get(0))
+                                        .append(",")
+                                        .append(animationModel.getGeoQueryModel().getL().get(1))
+                                        .toString();
+
+                                moveMarkerAnimation(driverGeoModel.getKey(),animationModel,currentMarker,from,to);
+                            }
+                            else
+                            {
+                                //First-time location storage within Common class.
+                                Common.driverLocationSubscribe.put(driverGeoModel.getKey(),animationModel);
+                            }
+                        }
                     }
                 }
                 @Override
@@ -473,6 +541,104 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
                     Snackbar.make(getView(),error.getMessage(),Snackbar.LENGTH_SHORT).show();
                 }
             });
+        }
+    }
+
+    private void moveMarkerAnimation(String key, AnimationModel animationModel, Marker currentMarker, String from, String to) {
+        //moves the Driver's marker from previous-location to current-latest-location.
+        if(!animationModel.isRun())
+        {
+            //Request API
+            compositeDisposable.add(iGoogleAPI.getDirections("driving",
+                    "less_driving",
+                    from,to,
+                    getString(R.string.google_api_key))
+            .subscribeOn(Schedulers.io())
+            .observeOn(AndroidSchedulers.mainThread())
+            .subscribe(returnResult -> {
+                Log.d("API_RETURN",returnResult);
+
+                try{
+                    //Parse the retreived-json of the whole locations that build the route....
+                    JSONObject jsonObject = new JSONObject(returnResult);
+                    JSONArray jsonArray = jsonObject.getJSONArray("routes");
+                    for(int i=0; i<jsonArray.length(); i++)
+                    {
+                        JSONObject route = jsonArray.getJSONObject(i);
+                        JSONObject poly = route.getJSONObject("overview_polyline");
+                        String polyline = poly.getString("points");
+                        //polylineList = Common.decodePoly(polyline);
+                        animationModel.setPolylineList(Common.decodePoly(polyline));
+                    }
+
+                    //Moving
+                    //index = -1;
+                    //next = 1;
+                    animationModel.setIndex(-1);
+                    animationModel.setNext(1);
+
+                    Runnable runnable = new Runnable() {
+                        @Override
+                        public void run() {
+                            if(animationModel.getPolylineList() != null && animationModel.getPolylineList().size() > 1)
+                            {
+                                if(animationModel.getIndex() < animationModel.getPolylineList().size() -2 ){
+                                    //index++;
+                                    animationModel.setIndex(animationModel.getIndex()+1);
+                                    //next = index+1;
+                                    animationModel.setNext(animationModel.getIndex()+1);
+                                    //start = polylineList.get(index);
+                                    animationModel.setStart(animationModel.getPolylineList().get(animationModel.getNext()));
+                                    //end=polylineList.get(next);
+                                    animationModel.setEnd(animationModel.getPolylineList().get(animationModel.getNext()));
+                                }
+
+                                ValueAnimator valueAnimator = ValueAnimator.ofInt(0,1);
+                                valueAnimator.setDuration(3000); //Sets the length of the animation.
+                                valueAnimator.setInterpolator(new LinearInterpolator()); //run in linear-motion!
+                                valueAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                                    //Adds a listener to the set of listeners that are sent update events through the life of an animation.
+                                    @Override
+                                    public void onAnimationUpdate(ValueAnimator value) {
+                                        //v = value.getAnimatedFraction(); //Returns the current animation fraction, which is the elapsed/interpolated fraction used in the most recent frame update on the animation.
+                                        animationModel.setV(value.getAnimatedFraction());
+                                        //lat = v*end.latitude + (1-v)*start.latitude;
+                                        animationModel.setLat(animationModel.getV()*animationModel.getEnd().latitude +
+                                                (1-animationModel.getV())
+                                                        *animationModel.getStart().latitude);
+                                        //lng = v*end.longitude + (1-v)*start.longitude;
+                                        animationModel.setLng(animationModel.getV()*animationModel.getEnd().longitude +
+                                                (1-animationModel.getV())
+                                                        *animationModel.getStart().longitude);
+
+                                        LatLng newPos = new LatLng(animationModel.getLat(),animationModel.getLng());
+                                        currentMarker.setPosition(newPos);
+                                        currentMarker.setAnchor(0.5f,0.5f);
+                                        currentMarker.setRotation(Common.getBearing(animationModel.getStart(),newPos)); //rotates the marker's icon
+
+                                    }
+                                });
+
+                                valueAnimator.start(); //Starts this animation.
+                                if(animationModel.getIndex() < animationModel.getPolylineList().size()-2) //if reached destination
+                                    animationModel.getHandler().postDelayed(this,1500); //run once again.
+                                else if(animationModel.getIndex() < animationModel.getPolylineList().size()-1) // Done..
+                                {
+                                    animationModel.setRun(false);
+                                    Common.driverLocationSubscribe.put(key,animationModel); // update data..
+                                }
+                            }
+                        }
+                    };
+
+                    //Run the handler!
+                    animationModel.getHandler().postDelayed(runnable,1500); //Causes the Runnable r to be added to the message queue, to be run after the specified amount of time elapses
+
+                } catch(Exception e){
+                    Snackbar.make(getView(),e.getMessage(),Snackbar.LENGTH_SHORT).show();
+                }
+            })
+            );
         }
     }
 }
