@@ -30,6 +30,9 @@
             android:value="@string/google_maps_key" />
 
         <activity
+            android:name=".RequestDriverActivity"
+            android:label="@string/title_activity_request_driver"></activity>
+        <activity
             android:name=".HomeActivity"
             android:label="@string/title_activity_home"
             android:theme="@style/AppTheme.NoActionBar" />
@@ -45,9 +48,8 @@
 
         <service android:name=".Services.MyFirebaseMessagingService">
             <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT"></action>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
-
         </service>
     </application>
 

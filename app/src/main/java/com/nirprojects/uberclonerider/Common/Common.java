@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.os.Build;
 import android.util.Log;
+import android.widget.TextView;
 
 import androidx.collection.CircularArray;
 import androidx.core.app.NotificationCompat;
@@ -23,6 +24,7 @@ import com.nirprojects.uberclonerider.R;
 
 import java.io.ObjectInputStream;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -143,5 +145,28 @@ public class Common {
         else if (begin.latitude < end.latitude && begin.longitude >= end.longitude)
             return (float) ((90 - Math.toDegrees(Math.atan(lng / lat))) + 270);
         return -1;
+    }
+
+    public static void setWelcomeMessage(TextView txt_welcome) {
+        int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        if(hour >= 1 && hour <=12)
+            txt_welcome.setText(new StringBuilder("Good Morning."));
+        else if(hour>=13 && hour <=17)
+            txt_welcome.setText(new StringBuilder("Good Afternoon."));
+        else
+            txt_welcome.setText(new StringBuilder("Good Evening."));
+
+    }
+
+    public static String formatDuration(String duration) {
+        if(duration.contains("mins"))
+            return duration.substring(0,duration.length()-1); //remove letter "s"
+        else
+            return duration;
+    }
+
+    public static String formatAddress(String start_address) {
+        int firstIndexOfComma = start_address.indexOf(",");
+        return start_address.substring(0,firstIndexOfComma); // Get only address
     }
 }

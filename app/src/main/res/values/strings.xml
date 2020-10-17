@@ -21,4 +21,9 @@
     <string name="permission_require">Location Permission Required</string>
     <string name="drivers_not_found">Drivers Not Found!</string>
     <string name="not_found_key">Not found driver with key</string>
+    <string name="welcome">Good Afternoon</string>
+    <string name="choose_a_saved_place">Choose A Saved Place</string>
+    <string name="where_to">Where To?</string>
+    <string name="city_name_empty">City Name Is Empty</string>
+    <string name="title_activity_request_driver">Map</string>
 </resources>
