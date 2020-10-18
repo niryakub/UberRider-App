@@ -329,7 +329,9 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
                                     //This method is called for every key currently in the search area at the time of adding the listener.
                                     //This method is once per key, and is only called again if onKeyExited was called in the meantime.
                                     public void onKeyEntered(String key, GeoLocation location) {
-                                        Common.driversFound.add(new DriverGeoModel(key, location)); // add it to the list of already found drivers within radius..
+                                        //Common.driversFound.add(new DriverGeoModel(key, location)); // add it to the list of already found drivers within radius..
+                                        if(!Common.driversFound.containsKey(key)) //add driver to drivers-within-range, if he doesn't exist already
+                                            Common.driversFound.put(key,new DriverGeoModel(key,location));
                                     }
 
                                     @Override
@@ -418,12 +420,12 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
     private void addDriverMarker() { //applies all Drivers-in-rider's-range markers within the rider's map
         if(Common.driversFound.size()>0)//if found any drivers..
         {
-            Observable.fromIterable(Common.driversFound)
+            Observable.fromIterable(Common.driversFound.keySet())
                     .subscribeOn(Schedulers.newThread()) //Asynchronously subscribes Observers to this ObservableSource on the specified Scheduler.
                     .observeOn(AndroidSchedulers.mainThread())
-                    .subscribe(driverGeoModel -> {
+                    .subscribe(key -> {
                         //On next
-                        findDriverByKey(driverGeoModel);
+                        findDriverByKey(Common.driversFound.get(key));
                     },throwable -> {
                         Snackbar.make(getView(),throwable.getMessage(),Snackbar.LENGTH_SHORT).show();
                     },()->{
@@ -447,6 +449,7 @@ public class HomeFragment extends Fragment implements OnMapReadyCallback, IFireb
                         if(dataSnapshot.hasChildren()) //meaning, if exists...
                         {
                             driverGeoModel.setDriverInfoModel(dataSnapshot.getValue(DriverInfoModel.class));
+                            Common.driversFound.get(driverGeoModel.getKey()).setDriverInfoModel(dataSnapshot.getValue(DriverInfoModel.class));
                             iFirebaseDriverInfoListener.onDriverInfoLoadSuccess(driverGeoModel);
                         }
                         else

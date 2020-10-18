@@ -26,4 +26,13 @@
     <string name="where_to">Where To?</string>
     <string name="city_name_empty">City Name Is Empty</string>
     <string name="title_activity_request_driver">Map</string>
+    <string name="pay_by_cash">Pay By Cash</string>
+    <string name="confirm_uber">Confirm Uber</string>
+    <string name="confirm_pickup_spot">Confirm Pickup Spot</string>
+    <string name="address_demo">Address-Mock-Demo.</string>
+    <string name="confirm_pickup">Confirm Pickup</string>
+    <string name="meet_driver_here">Meet Driver Here</string>
+    <string name="finding_your_ride">Finding your ride</string>
+    <string name="token_not_found">Token Not Found!</string>
+    <string name="request_driver_failed">Failed to send request notification to driver!</string>
 </resources>

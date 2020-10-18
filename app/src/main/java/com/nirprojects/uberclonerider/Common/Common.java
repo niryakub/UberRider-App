@@ -1,5 +1,6 @@
 package com.nirprojects.uberclonerider.Common;
 
+import android.animation.ValueAnimator;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -28,6 +29,7 @@ import java.util.Calendar;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class Common {
@@ -36,10 +38,12 @@ public class Common {
     public static final String TOKEN_REFERENCE = "Token"; //will be path within DB..
     public static final String DRIVERS_LOCATION_REFERENCES = "DriversLocation"; // will be path within DB..
     public static final String DRIVERS_INFO_REFERENCE = "DriverInfo"; //will be path within DB..
+    public static final String REQUEST_DRIVER_TITLE = "RequestDriver" ;
+    public static final String RIDER_PICKUP_LOCATION = "PickupLocation";
     public static RiderModel currentRider;
     public static final String NOTI_TITLE = "title";
     public static final String NOTI_CONTENT = "body";
-    public static Set<DriverGeoModel> driversFound = new HashSet<DriverGeoModel>();
+    public static Map<String,DriverGeoModel> driversFound = new HashMap<>();
     public static HashMap<String, Marker> markerList = new HashMap<>();
     public static HashMap<String, AnimationModel> driverLocationSubscribe = new HashMap<String,AnimationModel>(); //
 
@@ -168,5 +172,16 @@ public class Common {
     public static String formatAddress(String start_address) {
         int firstIndexOfComma = start_address.indexOf(",");
         return start_address.substring(0,firstIndexOfComma); // Get only address
+    }
+
+    public static ValueAnimator valueAnimate(long duration, ValueAnimator.AnimatorUpdateListener listener){
+        ValueAnimator va = ValueAnimator.ofFloat(0,100);
+        va.setDuration(duration);
+        va.addUpdateListener(listener);
+        va.setRepeatCount(ValueAnimator.INFINITE);
+        va.setRepeatMode(ValueAnimator.RESTART);
+
+        va.start();
+        return va;
     }
 }

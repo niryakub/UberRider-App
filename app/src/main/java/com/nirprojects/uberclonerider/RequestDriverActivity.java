@@ -1,6 +1,7 @@
 package com.nirprojects.uberclonerider;
 
 import androidx.annotation.NonNull;
+import androidx.cardview.widget.CardView;
 import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentActivity;
 
@@ -16,6 +17,7 @@ import android.util.EventLog;
 import android.util.Log;
 import android.view.View;
 import android.view.animation.LinearInterpolator;
+import android.widget.Button;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -25,6 +27,9 @@ import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
+import com.google.android.gms.maps.model.CameraPosition;
+import com.google.android.gms.maps.model.Circle;
+import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.JointType;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
@@ -39,9 +44,12 @@ import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.material.snackbar.Snackbar;
 import com.google.maps.android.ui.IconGenerator;
 import com.nirprojects.uberclonerider.Common.Common;
+import com.nirprojects.uberclonerider.Model.DriverGeoModel;
 import com.nirprojects.uberclonerider.Model.EventBus.SelectPlaceEvent;
+import com.nirprojects.uberclonerider.Model.FCMSendData;
 import com.nirprojects.uberclonerider.Remote.IGoogleAPI;
 import com.nirprojects.uberclonerider.Remote.RetrofitClient;
+import com.nirprojects.uberclonerider.Utils.UserUtils;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
@@ -52,15 +60,78 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 
+import butterknife.BindView;
+import butterknife.ButterKnife;
+import butterknife.OnClick;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.disposables.CompositeDisposable;
 import io.reactivex.schedulers.Schedulers;
 
 public class RequestDriverActivity extends FragmentActivity implements OnMapReadyCallback {
-
     private static final String TAG = "RequestDriverActivity" ;
-    private GoogleMap mMap;
 
+    //slow camera animation spinning
+    private ValueAnimator animator;
+    private static final int DESIRED_NUM_OF_SPINS = 5;
+    private static final int DESIRED_SECONDS_PER_ONE_FULL_360_SPIN=40;
+
+    //Effect
+    private Circle lastUserCircle; //A circle on the earth's surface (spherical cap).
+    private long duration = 1000;
+    private ValueAnimator lastPulseAnimator;
+
+    //View
+    @BindView(R.id.main_layout)
+    RelativeLayout main_layout;
+    @BindView(R.id.finding_your_ride_layout)
+    CardView finding_your_ride_layout;
+    @BindView(R.id.confirm_uber_layout)
+    CardView confirm_uber_layout;
+    @BindView(R.id.btn_confirm_uber)
+    Button btn_confirm_uber;
+    @BindView(R.id.confirm_pikcup_layout)
+    CardView confirm_pickup_layout;
+    @BindView(R.id.btn_confirm_pickup)
+    Button btn_confirm_pickup;
+    @BindView(R.id.txt_address_pickup)
+    TextView txt_address_pickup;
+    @BindView(R.id.fill_maps)
+    View fill_maps;
+
+    @OnClick(R.id.btn_confirm_uber) //apply onclikc logic to confirm-uber
+    void onConfirmUber()
+    {
+        Log.d(TAG,"onConfirmUber()");
+        confirm_pickup_layout.setVisibility(View.VISIBLE);//show pickup layout.
+        confirm_uber_layout.setVisibility(View.GONE);//hide uber layout
+        
+        setDataPickup();
+        
+    }
+
+    @OnClick(R.id.btn_confirm_pickup) // apply onclick logic to confirm-pickup
+    void onConfirmPickup(){
+        Log.d(TAG,"onConfirmPickup()");
+        if(mMap==null) return;
+        if(selectPlaceEvent == null) return; // if place picked(dest') is null..
+
+        //Clear map (we'll apply new costumized knit map)
+        mMap.clear();
+        //Tilt camera-view
+        CameraPosition cameraPosition = new CameraPosition.Builder()
+                .target(selectPlaceEvent.getOrigin())
+                .tilt(45f)
+                .zoom(16f)
+                .build();
+        mMap.moveCamera(CameraUpdateFactory.newCameraPosition(cameraPosition));
+
+        //Start animation of camera
+        addMarkerWithPulseAnimation();
+    }
+
+    private TextView txt_origin;
+
+    private GoogleMap mMap;
     private SelectPlaceEvent selectPlaceEvent;
 
     //Routes
@@ -71,6 +142,135 @@ public class RequestDriverActivity extends FragmentActivity implements OnMapRead
     private List<LatLng> polylineList = new ArrayList<>();
 
     private Marker originMarker,destinationMarker;
+
+    private void setDataPickup() {
+        Log.d(TAG,"setDataPickup()");
+        txt_address_pickup.setText(txt_origin != null ? txt_origin.getText() : "None");
+        mMap.clear();  //clear all map objects..
+        addPickupMarker();
+    }
+
+    private void addPickupMarker() {
+        Log.d(TAG,"addPickupMarker()");
+        View view = getLayoutInflater().inflate(R.layout.pickup_info_windows,null);
+        //Create Icon for marker
+        IconGenerator generator = new IconGenerator(this);
+        generator.setContentView(view);
+        generator.setBackground(new ColorDrawable(Color.TRANSPARENT));
+        Bitmap icon = generator.makeIcon();
+
+        originMarker = mMap.addMarker(new MarkerOptions()
+                .icon(BitmapDescriptorFactory.fromBitmap(icon))
+                .position(selectPlaceEvent.getOrigin()));
+    }
+
+    private void addMarkerWithPulseAnimation() { //Invoked once Rider confirms pickup!
+        Log.d(TAG,"addMarkerWithPulseAnimation");
+        confirm_pickup_layout.setVisibility(View.GONE);//once confirmed pickup, hide it..
+        fill_maps.setVisibility(View.VISIBLE);
+        finding_your_ride_layout.setVisibility(View.VISIBLE);//open finding_ride_layout..
+
+        originMarker = mMap.addMarker(new MarkerOptions()
+        .icon(BitmapDescriptorFactory.defaultMarker())
+        .position(selectPlaceEvent.getOrigin())); //apply Origin of route Marker.
+
+        addPulsatingEffect(selectPlaceEvent.getOrigin());
+
+    }
+
+    private void addPulsatingEffect(LatLng origin) { //para: Route's origin.
+        Log.d(TAG,"addPulsatingEffect()");
+        if(lastPulseAnimator != null) lastPulseAnimator.cancel();
+        if(lastUserCircle != null) lastUserCircle.setCenter(origin);
+
+        lastPulseAnimator = Common.valueAnimate(duration,animation -> {
+            if(lastUserCircle != null) lastUserCircle.setRadius((Float)animation.getAnimatedValue());
+            else
+            {
+                lastUserCircle = mMap.addCircle(new CircleOptions()
+                        .center(origin)
+                        .radius((Float)animation.getAnimatedValue())
+                        .strokeColor(Color.WHITE)
+                        .fillColor(Color.parseColor("#33333333"))
+                    );
+            }
+        });
+
+        startMapCameraSpinningAnimation(origin);
+
+    }
+
+    private void startMapCameraSpinningAnimation(LatLng target) {
+        Log.d(TAG,"startMapCameraSpinningAnimation()");
+        if(animator != null) animator.cancel();
+        animator = ValueAnimator.ofFloat(0,DESIRED_NUM_OF_SPINS*360);
+        animator.setDuration(DESIRED_SECONDS_PER_ONE_FULL_360_SPIN*DESIRED_NUM_OF_SPINS*1000);
+        animator.setInterpolator(new LinearInterpolator());
+        animator.setStartDelay(100);
+        animator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator valueAnimator) {
+                Float newBearingValue = (Float) valueAnimator.getAnimatedValue();
+                mMap.moveCamera(CameraUpdateFactory.newCameraPosition(new CameraPosition.Builder()
+                   .target(target)
+                    .zoom(16f)
+                    .tilt(45f)
+                    .bearing(newBearingValue) //Sets the direction that the camera is pointing in, in degrees clockwise from north.
+                    .build()));
+            }
+        });
+        animator.start();
+
+        //After starting animation, we find drivers within range..
+        findNearbyDriver(target);
+        
+    }
+
+    private void findNearbyDriver(LatLng target) { //para: Target= rider's pickup-location.
+        if(Common.driversFound.size() > 0) //if found any drivers within range. We'll retreive the nearest one!
+        {
+            float min_distance = 0;
+            DriverGeoModel foundDriver = Common.driversFound.get(Common.driversFound.keySet().iterator().next()); //Default set first driver is driver found
+            Location currentRiderLocation = new Location("");
+            currentRiderLocation.setLatitude(target.latitude);
+            currentRiderLocation.setLongitude(target.longitude);
+            for(String key:Common.driversFound.keySet())
+            {
+                Location driverLocation = new Location("");
+                driverLocation.setLatitude(Common.driversFound.get(key).getGeoLocation().latitude);
+                driverLocation.setLongitude(Common.driversFound.get(key).getGeoLocation().longitude);
+
+                //Compare 2 locations
+                if(min_distance == 0) //first found..
+                {
+                    min_distance = driverLocation.distanceTo(currentRiderLocation);
+                    foundDriver = Common.driversFound.get(key);
+                }
+                else if(driverLocation.distanceTo(currentRiderLocation) < min_distance) { //if found closer Driver..
+                    min_distance = driverLocation.distanceTo(currentRiderLocation);
+                    foundDriver = Common.driversFound.get(key);
+                }
+                //Snackbar.make(main_layout,new StringBuilder("Found Driver: ")
+                //.append(foundDriver.getDriverInfoModel().getPhoneNumber()),
+                 //       Snackbar.LENGTH_LONG).show();
+                UserUtils.sendRequestToDriver(this,main_layout,foundDriver,target);
+
+
+            }
+        }
+        else
+        {
+            //if not found...
+            Snackbar.make(main_layout,getString(R.string.drivers_not_found),Snackbar.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        Log.d(TAG,"onDestroy()");
+        if(animator!=null) animator.end();
+        super.onDestroy();
+    }
 
     @Override
     protected void onStart() {
@@ -115,6 +315,7 @@ public class RequestDriverActivity extends FragmentActivity implements OnMapRead
     }
 
     private void init() {
+        ButterKnife.bind(this);
         iGoogleAPI = RetrofitClient.getInstance().create(IGoogleAPI.class);
     }
 
@@ -132,35 +333,10 @@ public class RequestDriverActivity extends FragmentActivity implements OnMapRead
         Log.d(TAG,"onMapReady()");
         mMap = googleMap;
 
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) !=
-                        PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-        mMap.setMyLocationEnabled(true);
-        mMap.getUiSettings().setMyLocationButtonEnabled(true); //Enables or disables the my-location button
-        mMap.setOnMyLocationButtonClickListener(new GoogleMap.OnMyLocationButtonClickListener() {
-            @Override //applying logics to it...
-            public boolean onMyLocationButtonClick() {
 
-                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(selectPlaceEvent.getOrigin(),18f));
-
-                return true;
-            }
-        });
 
         drawPath(selectPlaceEvent);
-        //Layout button
-        View locationButton = ((View)findViewById(Integer.parseInt("1")).getParent())
-                .findViewById(Integer.parseInt("2"));
-        RelativeLayout.LayoutParams params = (RelativeLayout.LayoutParams) locationButton.getLayoutParams();
-        //Right buttom
-        params.addRule(RelativeLayout.ALIGN_PARENT_TOP,0);
-        params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM,RelativeLayout.TRUE);
-        params.setMargins(0,0,0,250); // move view so it won't clash ui-ly with zoom-controls..
 
-        mMap.getUiSettings().setZoomControlsEnabled(true);
         //Apply customized-GoogleMap-Style
         try {
             boolean success = googleMap.setMapStyle((MapStyleOptions.loadRawResourceStyle(this, R.raw.uber_maps_style)));
@@ -292,7 +468,7 @@ public class RequestDriverActivity extends FragmentActivity implements OnMapRead
         View view = getLayoutInflater().inflate(R.layout.origin_info_windows,null);
 
         TextView txt_time = (TextView)view.findViewById(R.id.txt_time);
-        TextView txt_origin = (TextView)view.findViewById(R.id.txt_origin);
+        txt_origin = (TextView)view.findViewById(R.id.txt_origin);
 
         txt_time.setText(Common.formatDuration(duration));
         txt_origin.setText(Common.formatAddress(start_address));
