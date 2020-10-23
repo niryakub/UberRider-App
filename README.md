@@ -8,4 +8,8 @@ An UberRider-Remake Android-Application
 
 
 
+=======
+![alt_text](https://github.com/niryakub/UberRider-App/blob/master/readmepics/Animated%20GIF-downsized_large%20(1).gif) ![alt_text](https://github.com/niryakub/UberRider-App/blob/master/readmepics/Animated%20GIF-downsized_large.gif)
+
+
 
